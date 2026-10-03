@@ -23,7 +23,6 @@ import com.sk89q.worldedit.WorldEditException;
 import com.sk89q.worldedit.extent.clipboard.BlockArrayClipboard;
 import com.sk89q.worldedit.extent.clipboard.Clipboard;
 import com.sk89q.worldedit.math.BlockVector2;
-import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.regions.Region;
 import com.sk89q.worldedit.util.io.file.SafeFiles;
 import org.bukkit.Bukkit;
@@ -34,7 +33,6 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -43,7 +41,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Function;
+import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 /**
  * Owns temporary generation resources and snapshots chunks after all their FEATURES writes finish.
@@ -51,21 +50,21 @@ import java.util.function.Function;
  *
  * @param <C> the adapter's chunk type
  */
-public abstract class AbstractRegeneration<C> implements BukkitImplAdapter.Regeneration {
+public final class BukkitRegeneration<C> implements BukkitImplAdapter.Regeneration {
     private final String name = "worldeditregentempworld_" + UUID.randomUUID();
     private final Path directory;
-    private final Map<String, World> worlds;
     private final List<AutoCloseable> resources = new ArrayList<>();
     private final CompletableFuture<Clipboard> result = new CompletableFuture<>();
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    protected AbstractRegeneration(Field worldsField) throws IOException {
+    public BukkitRegeneration(Field worldsField) throws IOException {
         this(worlds(worldsField));
     }
 
-    protected AbstractRegeneration(Map<String, World> worlds) throws IOException {
-        this.worlds = worlds;
+    BukkitRegeneration(Map<String, World> worlds) throws IOException {
         directory = Files.createTempDirectory("WorldEditWorldGen");
+        registerResource(() -> SafeFiles.tryHardToDeleteDir(directory));
+        registerResource(() -> worlds.remove(name));
     }
 
     @SuppressWarnings("unchecked")
@@ -77,40 +76,42 @@ public abstract class AbstractRegeneration<C> implements BukkitImplAdapter.Regen
         }
     }
 
-    protected final String name() {
+    public String name() {
         return name;
     }
 
-    protected final Path directory() {
+    public Path directory() {
         return directory;
     }
 
     /** Register immediately after acquisition; resources are closed in reverse order. */
-    protected final <T extends AutoCloseable> T registerResource(T resource) {
+    public <T extends AutoCloseable> T registerResource(T resource) {
         resources.add(resource);
         return resource;
     }
 
-    protected final void generate(Region selection, Function<BlockVector2, CompletableFuture<C>> loadChunk,
-                                  BlockCopier<C> copyBlock) {
+    public void generate(Region selection, BiConsumer<BlockVector2, Consumer<C>> loadChunk,
+                         SnapshotCopier<C> copy) {
         Region region = selection.clone();
-        List<BlockVector2> positions = new ArrayList<>(region.getChunks());
-        List<CompletableFuture<C>> chunks = positions.stream().map(loadChunk).toList();
-        var _ = ChunkSnapshot.create(chunks, generated -> {
+        List<CompletableFuture<C>> chunks = new ArrayList<>();
+        for (BlockVector2 position : region.getChunks()) {
+            CompletableFuture<C> chunk = new CompletableFuture<>();
+            chunks.add(chunk);
+            loadChunk.accept(position, generated -> {
+                if (generated == null) {
+                    chunk.completeExceptionally(new IllegalStateException("Failed to generate chunk " + position));
+                } else {
+                    chunk.complete(generated);
+                }
+            });
+        }
+        var _ = CompletableFuture.allOf(chunks.toArray(CompletableFuture[]::new)).thenApply(_ -> {
             // FEATURES can write into neighboring chunks. Read only after every requested chunk finishes.
-            Map<BlockVector2, C> byPosition = new HashMap<>();
-            for (int i = 0; i < positions.size(); i++) {
-                byPosition.put(positions.get(i), generated.get(i));
-            }
+            checkOpen();
             BlockArrayClipboard clipboard = new BlockArrayClipboard(region);
             try {
-                for (BlockVector3 block : region) {
-                    if (closed.get()) {
-                        throw new CancellationException("Generation world was closed");
-                    }
-                    C chunk = byPosition.get(BlockVector2.at(block.x() >> 4, block.z() >> 4));
-                    copyBlock.copy(clipboard, chunk, block);
-                }
+                // All futures are complete; the adapter can read them without blocking.
+                copy.copy(region, clipboard, chunks);
             } catch (WorldEditException e) {
                 throw new CompletionException(e);
             }
@@ -124,18 +125,25 @@ public abstract class AbstractRegeneration<C> implements BukkitImplAdapter.Regen
         });
     }
 
+    /** Check before reading each generated block, since disposal can race snapshot creation. */
+    public void checkOpen() {
+        if (closed.get()) {
+            throw new CancellationException("Generation world was closed");
+        }
+    }
+
     @FunctionalInterface
-    protected interface BlockCopier<C> {
-        void copy(Clipboard clipboard, C chunk, BlockVector3 position) throws WorldEditException;
+    public interface SnapshotCopier<C> {
+        void copy(Region region, Clipboard clipboard, List<CompletableFuture<C>> chunks) throws WorldEditException;
     }
 
     @Override
-    public final CompletionStage<Clipboard> result() {
+    public CompletionStage<Clipboard> result() {
         return result;
     }
 
     @Override
-    public final void close() throws IOException {
+    public void close() throws IOException {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
@@ -153,21 +161,7 @@ public abstract class AbstractRegeneration<C> implements BukkitImplAdapter.Regen
                 }
             }
         } finally {
-            try {
-                worlds.remove(name);
-            } finally {
-                try {
-                    SafeFiles.tryHardToDeleteDir(directory);
-                } catch (IOException e) {
-                    if (failure == null) {
-                        failure = e;
-                    } else {
-                        failure.addSuppressed(e);
-                    }
-                } finally {
-                    result.cancel(false);
-                }
-            }
+            result.cancel(false);
         }
         if (failure != null) {
             throw failure;

@@ -42,13 +42,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
-class AbstractRegenerationTest {
+class BukkitRegenerationTest {
     @Test
     void releasesResourcesInReverseOrderAndUnregistersOnlyItsOwnWorld() throws Exception {
         Map<String, World> worlds = new HashMap<>();
         World source = mock(World.class);
         worlds.put("source", source);
-        TestRegeneration generation = new TestRegeneration(worlds);
+        var generation = new BukkitRegeneration<AtomicInteger>(worlds);
         worlds.put(generation.name(), mock(World.class));
         Path directory = generation.directory();
         Files.writeString(directory.resolve("test"), "temporary data");
@@ -66,7 +66,7 @@ class AbstractRegenerationTest {
     @Test
     void continuesCleanupWhenStoppingChunksFails() throws Exception {
         Map<String, World> worlds = new HashMap<>();
-        TestRegeneration generation = new TestRegeneration(worlds);
+        var generation = new BukkitRegeneration<AtomicInteger>(worlds);
         worlds.put(generation.name(), mock(World.class));
         AtomicInteger storageCloses = new AtomicInteger();
         IOException failure = new IOException("chunk shutdown failed");
@@ -85,7 +85,7 @@ class AbstractRegenerationTest {
     @Test
     void cancelsTheResultEvenWhenDeletingTheDirectoryFails() throws Exception {
         Map<String, World> worlds = new HashMap<>();
-        TestRegeneration generation = new TestRegeneration(worlds);
+        var generation = new BukkitRegeneration<AtomicInteger>(worlds);
         worlds.put(generation.name(), mock(World.class));
         Path directory = generation.directory();
         Files.delete(directory);
@@ -101,12 +101,12 @@ class AbstractRegenerationTest {
 
     @Test
     void waitsForAllChunksBeforeCopyingNeighborFeatures() throws Exception {
-        try (TestRegeneration generation = new TestRegeneration(new HashMap<>())) {
+        try (var generation = new BukkitRegeneration<AtomicInteger>(new HashMap<>())) {
             CompletableFuture<AtomicInteger> first = new CompletableFuture<>();
             CompletableFuture<AtomicInteger> neighbor = new CompletableFuture<>();
             AtomicInteger firstBlock = new AtomicInteger(1);
             List<Integer> reads = new ArrayList<>();
-            generation.start(first, neighbor, reads);
+            start(generation, first, neighbor, reads);
             first.complete(firstBlock);
             assertTrue(reads.isEmpty());
             assertFalse(generation.result().toCompletableFuture().isDone());
@@ -121,11 +121,11 @@ class AbstractRegenerationTest {
 
     @Test
     void ignoresChunksCompletingAfterDisposal() throws Exception {
-        TestRegeneration generation = new TestRegeneration(new HashMap<>());
+        var generation = new BukkitRegeneration<AtomicInteger>(new HashMap<>());
         CompletableFuture<AtomicInteger> first = new CompletableFuture<>();
         CompletableFuture<AtomicInteger> neighbor = new CompletableFuture<>();
         List<Integer> reads = new ArrayList<>();
-        generation.start(first, neighbor, reads);
+        start(generation, first, neighbor, reads);
         first.complete(new AtomicInteger(1));
         generation.close();
         neighbor.complete(new AtomicInteger(2));
@@ -133,16 +133,32 @@ class AbstractRegenerationTest {
         assertTrue(generation.result().toCompletableFuture().isCancelled());
     }
 
-    private static final class TestRegeneration extends AbstractRegeneration<AtomicInteger> {
-        private TestRegeneration(Map<String, World> worlds) throws IOException {
-            super(worlds);
+    @Test
+    void doesNotReadChunksWhenGenerationFails() throws Exception {
+        try (var generation = new BukkitRegeneration<AtomicInteger>(new HashMap<>())) {
+            var first = new CompletableFuture<AtomicInteger>();
+            var neighbor = new CompletableFuture<AtomicInteger>();
+            List<Integer> reads = new ArrayList<>();
+            start(generation, first, neighbor, reads);
+            first.complete(new AtomicInteger(1));
+            neighbor.completeExceptionally(new IllegalStateException("generation failed"));
+            assertTrue(generation.result().toCompletableFuture().isCompletedExceptionally());
+            assertTrue(reads.isEmpty());
         }
+    }
 
-        private void start(CompletableFuture<AtomicInteger> first,
-                           CompletableFuture<AtomicInteger> neighbor, List<Integer> reads) {
-            var region = new CuboidRegion(BlockVector3.ZERO, BlockVector3.at(16, 0, 0));
-            generate(region, chunk -> chunk.equals(BlockVector2.ZERO) ? first : neighbor,
-                (_, chunk, _) -> reads.add(chunk.get()));
-        }
+    private static void start(BukkitRegeneration<AtomicInteger> generation,
+                              CompletableFuture<AtomicInteger> first,
+                              CompletableFuture<AtomicInteger> neighbor, List<Integer> reads) {
+        var region = new CuboidRegion(BlockVector3.ZERO, BlockVector3.at(16, 0, 0));
+        generation.generate(region, (position, callback) -> {
+            var chunk = position.equals(BlockVector2.ZERO) ? first : neighbor;
+            var _ = chunk.whenComplete((value, _) -> callback.accept(value));
+        }, (selection, _, _) -> {
+            for (BlockVector3 position : selection) {
+                generation.checkOpen();
+                reads.add((position.x() < 16 ? first : neighbor).join().get());
+            }
+        });
     }
 }

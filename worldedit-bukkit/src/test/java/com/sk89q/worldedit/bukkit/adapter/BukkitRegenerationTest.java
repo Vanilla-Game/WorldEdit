@@ -50,6 +50,7 @@ class BukkitRegenerationTest {
         worlds.put("source", source);
         var generation = new BukkitRegeneration<AtomicInteger>(worlds);
         worlds.put(generation.name(), mock(World.class));
+        assertThrows(IOException.class, () -> new BukkitRegeneration<AtomicInteger>(worlds));
         Path directory = generation.directory();
         Files.writeString(directory.resolve("test"), "temporary data");
         List<String> closed = new ArrayList<>();

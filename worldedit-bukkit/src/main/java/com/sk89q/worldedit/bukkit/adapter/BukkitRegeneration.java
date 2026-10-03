@@ -35,7 +35,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -51,7 +50,7 @@ import java.util.function.Consumer;
  * @param <C> the adapter's chunk type
  */
 public final class BukkitRegeneration<C> implements BukkitImplAdapter.Regeneration {
-    private final String name = "worldeditregentempworld_" + UUID.randomUUID();
+    private static final String NAME = "worldeditregentempworld";
     private final Path directory;
     private final List<AutoCloseable> resources = new ArrayList<>();
     private final CompletableFuture<Clipboard> result = new CompletableFuture<>();
@@ -62,9 +61,12 @@ public final class BukkitRegeneration<C> implements BukkitImplAdapter.Regenerati
     }
 
     BukkitRegeneration(Map<String, World> worlds) throws IOException {
+        if (worlds.containsKey(NAME)) {
+            throw new IOException("A world named " + NAME + " is already registered");
+        }
         directory = Files.createTempDirectory("WorldEditWorldGen");
         registerResource(() -> SafeFiles.tryHardToDeleteDir(directory));
-        registerResource(() -> worlds.remove(name));
+        registerResource(() -> worlds.remove(NAME));
     }
 
     @SuppressWarnings("unchecked")
@@ -77,7 +79,7 @@ public final class BukkitRegeneration<C> implements BukkitImplAdapter.Regenerati
     }
 
     public String name() {
-        return name;
+        return NAME;
     }
 
     public Path directory() {

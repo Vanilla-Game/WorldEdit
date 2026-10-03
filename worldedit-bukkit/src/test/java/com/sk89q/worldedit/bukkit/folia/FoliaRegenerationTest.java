@@ -56,6 +56,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FoliaRegenerationTest {
@@ -223,6 +224,32 @@ class FoliaRegenerationTest {
         }
     }
 
+    @Test
+    void rejectsSeedOverridesWhenTheAdapterCannotChangeSeeds() throws Exception {
+        try (Harness harness = new Harness()) {
+            var result = harness.start(RegenOptions.builder().seed(42L).build());
+            assertTrue(result.isCompletedExceptionally());
+            assertTrue(harness.global.isEmpty());
+            assertEquals(0, harness.generation.closes);
+        }
+    }
+
+    @Test
+    void forwardsSeedOverridesToAdaptersThatSupportThem() throws Exception {
+        try (Harness harness = new Harness()) {
+            when(harness.adapter.supportsRegenerationSeedOverride()).thenReturn(true);
+            var options = RegenOptions.builder().seed(42L).build();
+            var result = harness.start(options);
+            harness.global.remove().run();
+            verify(harness.adapter).beginRegeneration(eq(harness.world), any(), eq(options));
+            harness.generation.result.complete(harness.snapshot);
+            harness.global.remove().run();
+            harness.caller.remove().run();
+            assertSame(harness.snapshot, result.join());
+            assertEquals(1, harness.generation.closes);
+        }
+    }
+
     private static final class Harness implements AutoCloseable {
         private final MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
         private final MockedStatic<WorldEditText> text =
@@ -232,6 +259,7 @@ class FoliaRegenerationTest {
         private final org.bukkit.World world = mock(org.bukkit.World.class);
         private final WorldEditPlugin plugin = mock(WorldEditPlugin.class);
         private final Actor actor = mock(Actor.class);
+        private final BukkitImplAdapter adapter = mock(BukkitImplAdapter.class);
         private org.bukkit.entity.Player player;
         private Runnable retired;
         private boolean acceptsScheduling = true;
@@ -271,11 +299,14 @@ class FoliaRegenerationTest {
         }
 
         private CompletableFuture<Clipboard> start() throws Exception {
-            var adapter = mock(BukkitImplAdapter.class);
+            return start(RegenOptions.builder().build());
+        }
+
+        private CompletableFuture<Clipboard> start(RegenOptions options) throws Exception {
             when(adapter.beginRegeneration(eq(world),
                 any(), any())).thenReturn(generation);
             return service.regenerate(world, new CuboidRegion(BlockVector3.ZERO, BlockVector3.ZERO),
-                RegenOptions.builder().build(), actor, adapter).toCompletableFuture();
+                options, actor, adapter).toCompletableFuture();
         }
 
         private CompletableFuture<Clipboard> startAsPlayer() throws Exception {

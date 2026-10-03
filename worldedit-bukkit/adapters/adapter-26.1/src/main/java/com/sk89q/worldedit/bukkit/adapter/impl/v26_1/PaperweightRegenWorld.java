@@ -17,7 +17,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package com.sk89q.worldedit.bukkit.adapter.impl.v26_2;
+package com.sk89q.worldedit.bukkit.adapter.impl.v26_1;
 
 import ca.spottedleaf.concurrentutil.util.Priority;
 import com.sk89q.worldedit.bukkit.adapter.AbstractRegeneration;
@@ -27,7 +27,6 @@ import io.papermc.paper.world.PaperWorldLoader;
 import io.papermc.paper.world.saveddata.PaperWorldPDC;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.util.Util;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.dimension.LevelStem;
@@ -59,7 +58,7 @@ final class PaperweightRegenWorld extends AbstractRegeneration<ChunkAccess> {
             var data = new PaperWorldLoader.LoadedWorldData(name(), UUID.randomUUID(),
                 new PaperWorldPDC((CraftPersistentDataContainer) source.getPersistentDataContainer()),
                 original.serverLevelData);
-            world = new ServerLevel(original.getServer(), Util.backgroundExecutor(), storage,
+            world = new ServerLevel(original.getServer(), original.getServer().executor, storage,
                 original.worldGenSettings, original.dimension(),
                 new LevelStem(original.dimensionTypeRegistration(), original.getChunkSource().getGenerator()),
                 original.isDebug(), original.getSeed(), List.of(), false, dimension, source.getEnvironment(),

@@ -17,36 +17,37 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-package com.sk89q.worldedit.bukkit.adapter.impl.v26_2;
+package com.sk89q.worldedit.bukkit.adapter.impl.v1_21_6;
 
 import ca.spottedleaf.concurrentutil.util.Priority;
+import com.google.common.collect.ImmutableList;
+import com.mojang.serialization.Lifecycle;
 import com.sk89q.worldedit.bukkit.adapter.AbstractRegeneration;
 import com.sk89q.worldedit.regions.Region;
 import com.sk89q.worldedit.world.RegenOptions;
-import io.papermc.paper.world.PaperWorldLoader;
-import io.papermc.paper.world.saveddata.PaperWorldPDC;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.util.Util;
+import net.minecraft.server.level.progress.ChunkProgressListener;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.dimension.LevelStem;
+import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.storage.LevelStorageSource;
-import net.minecraft.world.level.storage.SavedDataStorage;
+import net.minecraft.world.level.storage.PrimaryLevelData;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftWorld;
-import org.bukkit.craftbukkit.persistence.CraftPersistentDataContainer;
 
 import java.lang.reflect.Field;
-import java.util.List;
-import java.util.UUID;
+import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 
 /** Creates the version-specific generation world; the common base owns its lifetime and snapshot. */
 final class PaperweightRegenWorld extends AbstractRegeneration<ChunkAccess> {
     private final ServerLevel world;
 
-    PaperweightRegenWorld(World source, Field worldsField) throws Exception {
+    PaperweightRegenWorld(World source, RegenOptions options, Field worldsField) throws Exception {
         super(worldsField);
         try {
             ResourceKey<LevelStem> dimension = switch (source.getEnvironment()) {
@@ -54,18 +55,29 @@ final class PaperweightRegenWorld extends AbstractRegeneration<ChunkAccess> {
                 case THE_END -> LevelStem.END;
                 default -> LevelStem.OVERWORLD;
             };
-            var storage = registerResource(LevelStorageSource.createDefault(directory()).createAccess(name()));
+            var storage = registerResource(LevelStorageSource.createDefault(directory()).createAccess(name(), dimension));
             ServerLevel original = ((CraftWorld) source).getHandle();
-            var data = new PaperWorldLoader.LoadedWorldData(name(), UUID.randomUUID(),
-                new PaperWorldPDC((CraftPersistentDataContainer) source.getPersistentDataContainer()),
-                original.serverLevelData);
-            world = new ServerLevel(original.getServer(), Util.backgroundExecutor(), storage,
-                original.worldGenSettings, original.dimension(),
+            PrimaryLevelData levelProperties = (PrimaryLevelData) original.getServer().getWorldData().overworldData();
+            WorldOptions originalOptions = levelProperties.worldGenOptions();
+            long seed = options.getSeed().orElse(original.getSeed());
+            WorldOptions worldOptions = options.getSeed().isPresent()
+                ? originalOptions.withSeed(OptionalLong.of(seed)) : originalOptions;
+            LevelSettings settings = new LevelSettings(name(), levelProperties.settings.gameType(),
+                levelProperties.settings.hardcore(), levelProperties.settings.difficulty(),
+                levelProperties.settings.allowCommands(), levelProperties.settings.gameRules(),
+                levelProperties.settings.getDataConfiguration());
+            @SuppressWarnings("deprecation")
+            PrimaryLevelData.SpecialWorldProperty special = levelProperties.isFlatWorld()
+                ? PrimaryLevelData.SpecialWorldProperty.FLAT
+                : levelProperties.isDebugWorld() ? PrimaryLevelData.SpecialWorldProperty.DEBUG
+                : PrimaryLevelData.SpecialWorldProperty.NONE;
+            PrimaryLevelData data = new PrimaryLevelData(settings, worldOptions, special, Lifecycle.stable());
+            world = new ServerLevel(original.getServer(), original.getServer().executor, storage, data,
+                original.dimension(),
                 new LevelStem(original.dimensionTypeRegistration(), original.getChunkSource().getGenerator()),
-                original.isDebug(), original.getSeed(), List.of(), false, dimension, source.getEnvironment(),
-                source.getGenerator(), source.getBiomeProvider(),
-                new SavedDataStorage(storage.getDimensionPath(original.dimension()),
-                    original.getServer().getFixerUpper(), original.registryAccess()), data);
+                new NoOpWorldLoadListener(),
+                original.isDebug(), seed, ImmutableList.of(), false, original.getRandomSequences(),
+                source.getEnvironment(), source.getGenerator(), source.getBiomeProvider());
             // Stop chunk workers before closing their storage and unregistering the temporary world.
             registerResource(() -> world.getChunkSource().close(false));
         } catch (Exception e) {
@@ -95,5 +107,23 @@ final class PaperweightRegenWorld extends AbstractRegeneration<ChunkAccess> {
                 });
             return generated;
         }, (clipboard, chunk, position) -> adapter.copyGeneratedBlock(clipboard, world, chunk, position, options));
+    }
+
+    private static class NoOpWorldLoadListener implements ChunkProgressListener {
+        @Override
+        public void updateSpawnPos(ChunkPos spawnPos) {
+        }
+
+        @Override
+        public void onStatusChange(ChunkPos pos, @org.jetbrains.annotations.Nullable ChunkStatus status) {
+        }
+
+        @Override
+        public void start() {
+        }
+
+        @Override
+        public void stop() {
+        }
     }
 }

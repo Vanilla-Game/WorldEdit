@@ -67,7 +67,7 @@ public final class FoliaRegeneration implements AutoCloseable {
         var _ = result.whenComplete((_, _) -> pending.remove(id));
         try {
             requireOwned(world, region);
-            if (options.getSeed().isPresent()) {
+            if (options.getSeed().isPresent() && !adapter.supportsRegenerationSeedOverride()) {
                 throw failure("worldedit.regen.seed-unsupported");
             }
             if (world.getGenerator() != null || world.getBiomeProvider() != null) {

@@ -271,6 +271,15 @@ public interface BukkitImplAdapter {
     }
 
     /**
+     * Whether asynchronous regeneration can use a seed other than the source world's seed.
+     *
+     * @return true if a seed override is supported
+     */
+    default boolean supportsRegenerationSeedOverride() {
+        return false;
+    }
+
+    /**
      * Begin generation in a temporary world. Must be called on the global region thread.
      *
      * @param world the source world

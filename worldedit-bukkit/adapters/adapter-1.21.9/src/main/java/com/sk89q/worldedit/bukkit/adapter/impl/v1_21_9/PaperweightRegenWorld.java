@@ -70,6 +70,8 @@ final class PaperweightRegenWorld extends AbstractRegeneration<ChunkAccess> {
                 : levelProperties.isDebugWorld() ? PrimaryLevelData.SpecialWorldProperty.DEBUG
                 : PrimaryLevelData.SpecialWorldProperty.NONE;
             PrimaryLevelData data = new PrimaryLevelData(settings, worldOptions, special, Lifecycle.stable());
+            // Folia ticks temporary worlds too; skip spawn initialization and its synchronous chunk loads.
+            data.setInitialized(true);
             world = new ServerLevel(original.getServer(), original.getServer().executor, storage, data,
                 original.dimension(),
                 new LevelStem(original.dimensionTypeRegistration(), original.getChunkSource().getGenerator()),

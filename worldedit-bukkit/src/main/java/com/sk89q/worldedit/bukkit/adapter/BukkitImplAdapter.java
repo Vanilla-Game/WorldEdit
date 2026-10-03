@@ -25,6 +25,7 @@ import com.sk89q.worldedit.blocks.BaseItem;
 import com.sk89q.worldedit.blocks.BaseItemStack;
 import com.sk89q.worldedit.entity.BaseEntity;
 import com.sk89q.worldedit.extent.Extent;
+import com.sk89q.worldedit.extent.clipboard.Clipboard;
 import com.sk89q.worldedit.internal.wna.WorldNativeAccess;
 import com.sk89q.worldedit.math.BlockVector2;
 import com.sk89q.worldedit.math.BlockVector3;
@@ -52,9 +53,11 @@ import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
 import org.enginehub.linbus.tree.LinCompoundTag;
 
+import java.io.IOException;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.concurrent.CompletionStage;
 import javax.annotation.Nullable;
 
 /**
@@ -256,6 +259,41 @@ public interface BukkitImplAdapter {
      */
     default boolean regenerate(World world, Region region, Extent extent, RegenOptions options) {
         throw new UnsupportedOperationException("This adapter does not support regeneration.");
+    }
+
+    /**
+     * Whether this adapter can generate detached snapshots without blocking a region thread.
+     *
+     * @return whether {@link #beginRegeneration(World, Region, RegenOptions)} is supported
+     */
+    default boolean supportsAsyncRegeneration() {
+        return false;
+    }
+
+    /**
+     * Begin generation in a temporary world. Must be called on the global region thread.
+     *
+     * @param world the source world
+     * @param region the region to generate
+     * @param options the regeneration options
+     * @return the generation job, which the caller must close on the global region thread
+     */
+    default Regeneration beginRegeneration(World world, Region region, RegenOptions options) throws Exception {
+        throw new UnsupportedOperationException("This adapter does not support asynchronous regeneration.");
+    }
+
+    /** A detached generation result and its temporary world resources. */
+    interface Regeneration extends AutoCloseable {
+        /**
+         * Get the generated snapshot, without reading or modifying the source world.
+         *
+         * @return the generated blocks and optional biomes
+         */
+        CompletionStage<Clipboard> result();
+
+        /** Stop generation and release temporary world resources on the global region thread. */
+        @Override
+        void close() throws IOException;
     }
 
     /**
